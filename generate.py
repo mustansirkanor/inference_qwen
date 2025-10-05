@@ -1,61 +1,30 @@
-import torch
-from huggingface_hub import snapshot_download
-from diffusers import (
-    QwenImageEditPipeline,
-    FlowMatchEulerDiscreteScheduler,
-    AutoencoderKLQwenImage,
-    QwenImageTransformer2DModel,
-)
-from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwen2VLProcessor
+from PIL import Image
+from .model_manager import load_qwen_model
 
-def load_qwen_lightning():
-    """Load Qwen Image Edit + Lightning LoRA model"""
-    repo_id = "Qwen/Qwen-Image-Edit"
-    cache_dir = snapshot_download(repo_id)
+def generate_image(image_path, prompt, output_path="output.png"):
+    """
+    Generates a novel view of the provided image using Qwen-Image-Lightning.
+    Args:
+        image_path (str): Path to input image.
+        prompt (str): Text prompt for novel view generation.
+        output_path (str): Path to save the generated image.
+    """
+    print(f"🧠 Loading model...")
+    pipe = load_qwen_model()
+    img = Image.open(image_path).convert("RGB")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    print(f"🎨 Generating novel view for {image_path}...")
+    result = pipe(
+        image=img,
+        prompt=prompt,
+        negative_prompt="cropped, warped, distorted, duplicate objects, noisy, blurry",
+        height=1024,
+        width=1024,
+        num_inference_steps=8,
+        num_images_per_prompt=1,
+        true_cfg_scale=2.5,
+    ).images[0]
 
-    transformer = QwenImageTransformer2DModel.from_pretrained(
-        cache_dir + "/transformer", torch_dtype=dtype
-    ).to(device)
-
-    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-        cache_dir, subfolder="scheduler"
-    )
-
-    vae = AutoencoderKLQwenImage.from_pretrained(
-        cache_dir + "/vae", torch_dtype=dtype
-    ).to(device)
-
-    text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        cache_dir + "/text_encoder", torch_dtype=dtype
-    ).to(device)
-
-    tokenizer = Qwen2Tokenizer.from_pretrained(cache_dir + "/tokenizer")
-    processor = Qwen2VLProcessor.from_pretrained(cache_dir + "/processor")
-
-    pipe = QwenImageEditPipeline(
-        transformer=transformer,
-        scheduler=scheduler,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        processor=processor,
-    ).to(device)
-
-    pipe.enable_attention_slicing()
-    pipe.enable_vae_slicing()
-    pipe.enable_vae_tiling()
-
-    # Load Lightning LoRA
-    pipe.load_lora_weights(
-        "lightx2v/Qwen-Image-Lightning",
-        weight_name="Qwen-Image-Lightning-4steps-V1.0.safetensors",
-    )
-    try:
-        pipe.fuse_lora()
-    except Exception:
-        pass
-
-    return pipe
+    result.save(output_path)
+    print(f"✅ Saved generated image at {output_path}")
+    return output_path
